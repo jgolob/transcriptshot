@@ -43,8 +43,8 @@ mkdir data
 mkdir TEMP
 mkdir SCRATCH
 
-ln -s ${eggnog_db} data/eggnog.db
-ln -s ${eggnog_dmnd} data/eggnog_proteins.dmnd
+cp ${eggnog_db} data/eggnog.db
+cp ${eggnog_dmnd} data/eggnog_proteins.dmnd
 
 emapper.py \
     -i ${query} \
