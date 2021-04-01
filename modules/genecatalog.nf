@@ -361,5 +361,6 @@ workflow {
             ]        
         }
     )
+    manifest.other.view()
 
 }
