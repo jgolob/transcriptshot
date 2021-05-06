@@ -37,7 +37,6 @@ workflow GenomeToAlleles {
         Extract_GB_CDS(
             genome_manifest_ch
         )
-        Extract_GB_CDS.out.view()
         // Concatenate the per-genome catalogs into one catalog with each gene assigned a unique name
         CombineAndRenameAlleles(
             Prodigal.out[0].collect{ it[0] },
@@ -86,11 +85,12 @@ process Extract_GB_CDS {
         tuple val(organism), val(shortname), file(genbank_f)
 
     output: 
-        tuple val(organism), val(shortname), path("${shortname}.fasta"), path("${shortname}.cds.csv")
+        tuple val(organism), val(shortname), path("${shortname}.fastp"), path("${shortname}.cds.csv")
 """
 #!/usr/bin/env python
 
 from Bio import SeqIO
+from Bio.SeqRecord import SeqRecord
 import gzip
 import csv
 
@@ -101,32 +101,49 @@ srs = SeqIO.parse(
 , 'gb')
 
 locus_details = []
-with open('${shortname}.fasta', 'wt') as out_h:
-    for sr in srs:
-        for feat in sr.features:
-            if feat.type != 'CDS':
-                continue
-            # Implicit else
-            gene = feat.qualifiers.get('gene',[''])[0]
-            locus_tag = feat.qualifiers.get('locus_tag',[''])[0]
-            if locus_tag == "":
-                print("missing tag")
-            out_h.write(">{} {}\\n{}\\n".format(
-                locus_tag,
-                "; ".join(
-                    feat.qualifiers.get('gene', [])+
-                    feat.qualifiers.get('product', [])
-                ),
-                feat.extract(sr.seq)
-            ))
-            locus_details.append({
-                'locus_tag': locus_tag,
-                'gene': '; '.join(feat.qualifiers.get('gene', [])),
-                'product': '; '.join(feat.qualifiers.get('product', []))
-            })
+seq_records = []
+for sr in srs:
+    for feat in sr.features:
+        if feat.type != 'CDS':
+            continue
+        # Implicit else
+        gene = feat.qualifiers.get('gene',[''])[0]
+        locus_tag = feat.qualifiers.get('locus_tag',[''])[0]
+        label = feat.qualifiers.get('label',[''])[0]
+        if locus_tag == "" and label == "":
+            print("missing tag or label")
+            continue
+        elif locus_tag != "":
+            feat_id = locus_tag
+        else:
+            feat_id = label
+                
+        seq_records.append(
+            SeqRecord(
+                feat.translate(sr.seq, cds=False),
+                id=feat_id,
+                name=gene,
+                description='; '.join(feat.qualifiers.get('product', []))
+            )
+        )
+        locus_details.append({
+            'feat_id': feat_id,
+            'locus_tag': locus_tag,
+            'label': label,
+            'gene': '; '.join(feat.qualifiers.get('gene', [])),
+            'product': '; '.join(feat.qualifiers.get('product', [])),
+            'length': len(feat.extract(sr.seq))
+        })
 
+
+SeqIO.write(
+    seq_records,
+    "${shortname}.fastp",
+    'fasta'
+)
 with open('${shortname}.cds.csv', 'wt') as out_h:
-    out_w = csv.DictWriter(out_h, fieldnames=['locus_tag', 'gene', 'product'])
+    out_w = csv.DictWriter(out_h, fieldnames=['feat_id', 'label', 'locus_tag', 'gene', 'product', 'length'])
+    out_w.writeheader()
     out_w.writerows(locus_details)
 
 """
