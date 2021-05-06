@@ -16,12 +16,13 @@
 container__prodigal = 'quay.io/biocontainers/prodigal:2.6.3--h516909a_2'
 container__diamond = 'quay.io/fhcrc-microbiome/docker-diamond:v2.0.6-biopython'
 container__pandas = "quay.io/fhcrc-microbiome/python-pandas:v1.0.3"
+container__biopython = 'quay.io/biocontainers/biopython:1.78'
 
 // Using DSL-2
 nextflow.enable.dsl=2
 
 // Default parameters
-params.cluster_min_identity = 90
+params.cluster_min_identity = 100
 params.output = './output'
 
 
@@ -33,6 +34,10 @@ workflow GenomeToAlleles {
         Prodigal(
             genome_manifest_ch
         )
+        Extract_GB_CDS(
+            genome_manifest_ch
+        )
+        Extract_GB_CDS.out.view()
         // Concatenate the per-genome catalogs into one catalog with each gene assigned a unique name
         CombineAndRenameAlleles(
             Prodigal.out[0].collect{ it[0] },
@@ -69,6 +74,62 @@ def ReadGenomeManifest(genome_manifest_file){
         valid:  (it.organism != null) && (it.organism_shortname != null) && (it.path != null ) && (it.path != "" ) && (!file(it.path).isEmpty())
         other: true
     }
+}
+
+process Extract_GB_CDS {
+    tag "Extract annotated CDS from genbank genomes"
+    container "${container__biopython}"
+    label 'io_limited'
+    publishDir "${params.output}/gene_catalog/${shortname}/", mode: "copy"
+
+    input:
+        tuple val(organism), val(shortname), file(genbank_f)
+
+    output: 
+        tuple val(organism), val(shortname), path("${shortname}.fasta"), path("${shortname}.cds.csv")
+"""
+#!/usr/bin/env python
+
+from Bio import SeqIO
+import gzip
+import csv
+
+srs = SeqIO.parse(
+    gzip.open(
+        '${genbank_f}'
+        , 'rt')
+, 'gb')
+
+locus_details = []
+with open('${shortname}.fasta', 'wt') as out_h:
+    for sr in srs:
+        for feat in sr.features:
+            if feat.type != 'CDS':
+                continue
+            # Implicit else
+            gene = feat.qualifiers.get('gene',[''])[0]
+            locus_tag = feat.qualifiers.get('locus_tag',[''])[0]
+            if locus_tag == "":
+                print("missing tag")
+            out_h.write(">{} {}\\n{}\\n".format(
+                locus_tag,
+                "; ".join(
+                    feat.qualifiers.get('gene', [])+
+                    feat.qualifiers.get('product', [])
+                ),
+                feat.extract(sr.seq)
+            ))
+            locus_details.append({
+                'locus_tag': locus_tag,
+                'gene': '; '.join(feat.qualifiers.get('gene', [])),
+                'product': '; '.join(feat.qualifiers.get('product', []))
+            })
+
+with open('${shortname}.cds.csv', 'wt') as out_h:
+    out_w = csv.DictWriter(out_h, fieldnames=['locus_tag', 'gene', 'product'])
+    out_w.writerows(locus_details)
+
+"""
 }
 
 process Prodigal {
@@ -335,7 +396,7 @@ def helpMessage() {
                         genome_allele_gene_map.csv.gz               A mapping of organism - shortname - gene_id - centroid_id
     
     Parameters:
-    --cluster_min_identity                      Min PERCENT identity for clustering stage. (Default 90)
+    --cluster_min_identity                      Min PERCENT identity for clustering stage. (Default 100)
 
     """.stripIndent()
 }
